@@ -1,0 +1,13 @@
+/* src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Optional: You can add some global base styles here if needed */
+body {
+  font-family: 'Inter', sans-serif; /* Example: Add a nice sans-serif font */
+  @apply bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100;
+  transition-property: background-color, color;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 300ms;
+}
