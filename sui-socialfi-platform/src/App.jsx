@@ -15,7 +15,6 @@ import SettingsPage from './pages/SettingsPage';
 // Import Helper Components
 import Button from './components/Button';
 
-// Initial Mock Data (used as fallbacks or for components not yet Supabase-driven)
 const initialTrendingTokensData = [
   { id: 'trend1', name: 'SuiGrowth', symbol: 'SGR', price: 0.12, change: "+5.2%", logo: "https://placehold.co/40x40/FBBF24/854D0E?text=SGR" },
   { id: 'trend2', name: 'ConnectX', symbol: 'CNX', price: 0.08, change: "+12.1%", logo: "https://placehold.co/40x40/6EE7B7/047857?text=CNX" },
@@ -56,7 +55,7 @@ const App = () => {
   const currentWallet = useCurrentAccount();
   const { mutate: disconnectWallet } = useDisconnectWallet();
 
-  useEffect(() => {
+  useEffect(() => { 
     const timer = setTimeout(() => setIsLoading(false), 300);
     const savedTheme = localStorage.getItem('socialfi-theme') || 'light';
     setTheme(savedTheme);
@@ -64,14 +63,17 @@ const App = () => {
     return () => clearTimeout(timer);
   }, []);
 
-  useEffect(() => {
+  useEffect(() => { 
     const fetchOrCreateUserProfile = async (suiAddress) => {
       setIsProfileLoading(true);
       let userProfileData = null; 
       try {
         let { data: profile, error: fetchError } = await supabase
           .from('profiles').select('*').eq('sui_address', suiAddress).single();
-        if (fetchError && fetchError.code !== 'PGRST116') { throw fetchError; }
+        if (fetchError && fetchError.code !== 'PGRST116') { 
+            console.error('Error fetching profile (excluding not found):', fetchError.message);
+            if (fetchError.code !== 'PGRST116') throw fetchError;
+        }
         if (profile) { 
           console.log("Found existing profile in Supabase:", profile);
           userProfileData = profile; 
@@ -87,11 +89,13 @@ const App = () => {
           if (insertError) {
             if (insertError.message.includes('duplicate key value violates unique constraint "profiles_username_key"')) {
                 const fallbackUsername = `${defaultUsername}_${Math.random().toString(36).substring(2, 4)}`;
+                console.log(`Username conflict, trying fallback: ${fallbackUsername}`);
                 const { data: fallbackProfile, error: fallbackError } = await supabase
                     .from('profiles').insert({ ...newProfileToInsert, username: fallbackUsername }).select().single();
-                if (fallbackError) throw fallbackError; userProfileData = fallbackProfile;
+                if (fallbackError) { console.error("Error creating profile with fallback username:", fallbackError.message); throw fallbackError;}
+                userProfileData = fallbackProfile;
                 console.log("Created new profile with fallback username:", userProfileData);
-            } else { throw insertError; }
+            } else { console.error("Error creating profile:", insertError.message); throw insertError; }
           } else { 
             userProfileData = createdProfile; 
             console.log("Successfully created new profile in Supabase:", userProfileData);
@@ -104,70 +108,81 @@ const App = () => {
           };
           setAppUser(augmentedProfile);
         }
-      } catch (error) { console.error("Failed in fetchOrCreateUserProfile:", error.message, error); setAppUser(null); 
+      } catch (error) { console.error("Failed in fetchOrCreateUserProfile catch block:", error.message, error); setAppUser(null); 
       } finally { setIsProfileLoading(false); }
     };
-
-    if (currentWallet && currentWallet.address) {
-      fetchOrCreateUserProfile(currentWallet.address);
-    } else {
-      setAppUser(null); 
-    }
+    if (currentWallet && currentWallet.address) { fetchOrCreateUserProfile(currentWallet.address);
+    } else { setAppUser(null); }
   }, [currentWallet]);
 
 
+  // Fetch posts from Supabase
   useEffect(() => {
     const fetchPostsFromSupabase = async () => {
       setIsPostsLoading(true);
       try {
-        const { data: supabasePosts, error } = await supabase
+        const { data: supabasePosts, error: postsError } = await supabase
           .from('posts')
           .select(`
             id, content, media_url, created_at, user_id,
-            profiles (id, username, display_name, avatar_url, sui_address)
+            profiles:posts_user_id_fkey (id, username, display_name, avatar_url, sui_address),
+            likes (user_id),
+            comments_data:comments (count) 
           `)
           .order('created_at', { ascending: false });
 
-        if (error) { console.error("Error fetching posts from Supabase:", error.message); throw error; }
+        if (postsError) { 
+          console.error("Error fetching posts from Supabase:", postsError.message); 
+          throw postsError; 
+        }
 
         if (supabasePosts) {
-          const formattedPosts = supabasePosts.map(post => ({
-            id: post.id, content: post.content, media: post.media_url,
-            timestamp: new Date(post.created_at).toLocaleTimeString([], { day: 'numeric', month:'short', hour: '2-digit', minute: '2-digit' }),
-            user: {
-                id: post.profiles?.id, 
-                name: post.profiles?.display_name || post.profiles?.username || 'Unknown User',
-                username: post.profiles?.username || 'unknown_user',
-                avatar: post.profiles?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${post.profiles?.sui_address || post.user_id}`,
-                sui_address: post.profiles?.sui_address,
-            },
-            user_id: post.user_id, likes: 0, comments: 0, shares: 0,
-          }));
+          const formattedPosts = supabasePosts.map(post => {
+            const authorProfile = post.profiles; 
+            const currentUserLike = appUser && post.likes ? post.likes.find(like => like.user_id === appUser.id) : null;
+            const count = post.comments_data && post.comments_data.length > 0 ? post.comments_data[0].count : 0;
+            return {
+              id: post.id, content: post.content, media: post.media_url,
+              timestamp: new Date(post.created_at).toLocaleTimeString([], { day: 'numeric', month:'short', hour: '2-digit', minute: '2-digit' }),
+              user: {
+                  id: authorProfile?.id, 
+                  name: authorProfile?.display_name || authorProfile?.username || 'Unknown User',
+                  username: authorProfile?.username || 'unknown_user',
+                  avatar: authorProfile?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${authorProfile?.sui_address || post.user_id}`,
+                  sui_address: authorProfile?.sui_address,
+              },
+              user_id: post.user_id, 
+              likes: post.likes?.length || 0, 
+              isLikedByCurrentUser: !!currentUserLike, 
+              commentsCount: count, 
+              comments: [], 
+              areCommentsFetched: false,
+              sharesCount: 0,
+            };
+          });
           setPosts(formattedPosts);
-          console.log("Fetched and formatted posts:", formattedPosts);
+          console.log("Fetched posts with comment counts:", formattedPosts);
         }
-      } catch (error) { console.error("Failed to fetch posts:", error); setPosts([]);
+      } catch (error) { console.error("Failed to fetch posts:", error.message); setPosts([]);
       } finally { setIsPostsLoading(false); }
     };
     fetchPostsFromSupabase(); 
-  }, []); 
+  }, [appUser]);
 
 
-  const toggleTheme = () => {
+  const toggleTheme = () => { 
     const newTheme = theme === 'light' ? 'dark' : 'light';
     setTheme(newTheme);
     localStorage.setItem('socialfi-theme', newTheme);
     document.documentElement.classList.toggle('dark', newTheme === 'dark');
   };
-
-  const handleNavigation = (page, args = null) => {
+  const handleNavigation = (page, args = null) => { 
     setCurrentPage(page);
     setPageArgs(args);
     setIsMobileMenuOpen(false);
     window.scrollTo(0, 0);
   };
-
-  const handleUpdateUser = async (updatedProfileData) => {
+  const handleUpdateUser = async (updatedProfileData) => { 
     if (!appUser || !appUser.sui_address) { alert("User not loaded. Cannot update."); return; }
     const userBeforeUpdate = { ...appUser }; 
     const profileUpdateForSupabase = {
@@ -188,16 +203,15 @@ const App = () => {
         suiBalance: (prev || {}).suiBalance, tokens: (prev || {}).tokens,
       }));
       if (userBeforeUpdate && (data.display_name !== userBeforeUpdate.display_name || data.username !== userBeforeUpdate.username || data.avatar_url !== userBeforeUpdate.avatar_url)) {
-          console.log("Profile details changed, updating posts...");
+          console.log("Profile details changed, updating posts' user info...");
           setPosts(prevPosts => prevPosts.map(post => {
-              const postUserIdentifier = post.user.sui_address || post.user.username; // Fallback
-              const userBeforeUpdateIdentifier = userBeforeUpdate.sui_address || userBeforeUpdate.username;
-              if (postUserIdentifier === userBeforeUpdateIdentifier) { 
-                  console.log("Updating post for user:", post.id);
+              if (post.user_id === userBeforeUpdate.id) { 
+                  console.log("Updating post user details for post ID:", post.id);
                   return { ...post, user: { ...post.user,
                       name: data.display_name || userBeforeUpdate.display_name, 
                       username: data.username || userBeforeUpdate.username,
                       avatar: data.avatar_url || userBeforeUpdate.avatar_url,
+                      sui_address: data.sui_address,
                   }};
               }
               return post;
@@ -206,43 +220,158 @@ const App = () => {
     } catch (error) { console.error("Catch block in handleUpdateUser:", error); setAppUser(userBeforeUpdate); alert("An unexpected error occurred during profile update.");}
   };
   
-  const handleCreatePost = async (newPostData) => {
+  const handleCreatePost = async (newPostData) => { 
     if (!appUser || !appUser.id) { alert("Please connect wallet and load profile to post."); return; }
     const postToInsert = { user_id: appUser.id, content: newPostData.content, media_url: newPostData.media_url || null };
     try {
       const { data: createdPost, error } = await supabase.from('posts').insert(postToInsert)
-        .select(`*, profiles (id, username, display_name, avatar_url, sui_address)`).single();
+        .select(`*, profiles:posts_user_id_fkey (id, username, display_name, avatar_url, sui_address)`).single();
       if (error) { throw error; }
-      console.log("Post created successfully in Supabase:", createdPost);
+      const authorProfile = createdPost.profiles; 
       const displayPost = {
         id: createdPost.id, content: createdPost.content, media: createdPost.media_url,
         timestamp: new Date(createdPost.created_at).toLocaleTimeString([], { day: 'numeric', month:'short', hour: '2-digit', minute: '2-digit' }),
-        user: { id: createdPost.profiles.id, name: createdPost.profiles.display_name || createdPost.profiles.username,
-            username: createdPost.profiles.username, avatar: createdPost.profiles.avatar_url, sui_address: createdPost.profiles.sui_address,
-        }, user_id: createdPost.user_id, likes: 0, comments: 0, shares: 0,
+        user: { id: authorProfile?.id, name: authorProfile?.display_name || authorProfile?.username,
+            username: authorProfile?.username, avatar: authorProfile?.avatar_url, sui_address: authorProfile?.sui_address,
+        }, user_id: createdPost.user_id, 
+        likes: 0, isLikedByCurrentUser: false, 
+        commentsCount: 0, 
+        comments: [],     
+        areCommentsFetched: true,
+        sharesCount: 0,
       };
       setPosts(prevPosts => [displayPost, ...prevPosts]);
     } catch (error) { console.error("Error creating post in Supabase:", error.message); alert(`Failed to create post: ${error.message}`); }
   };
 
-  const handleCreateLaunchpadProject = (newProject) => {
+  const handleLikeToggle = async (postId) => { 
+    if (!appUser || !appUser.id) { alert("Please connect your wallet to like posts."); return; }
+    const postIndex = posts.findIndex(p => p.id === postId);
+    if (postIndex === -1) return;
+    const postToUpdate = posts[postIndex];
+    const alreadyLiked = postToUpdate.isLikedByCurrentUser;
+    const updatedPosts = [...posts];
+    updatedPosts[postIndex] = { ...postToUpdate,
+      likes: alreadyLiked ? postToUpdate.likes - 1 : postToUpdate.likes + 1,
+      isLikedByCurrentUser: !alreadyLiked,
+    };
+    setPosts(updatedPosts);
+    try {
+      if (alreadyLiked) {
+        const { error } = await supabase.from('likes').delete().match({ post_id: postId, user_id: appUser.id });
+        if (error) throw error; console.log(`Post ${postId} unliked by user ${appUser.id}`);
+      } else {
+        const { error } = await supabase.from('likes').insert({ post_id: postId, user_id: appUser.id });
+        if (error) throw error; console.log(`Post ${postId} liked by user ${appUser.id}`);
+      }
+    } catch (error) {
+      console.error("Error toggling like in Supabase:", error.message);
+      setPosts(prevPosts => { 
+        const revertedPosts = [...prevPosts];
+        revertedPosts[postIndex] = postToUpdate; return revertedPosts;
+      });
+      alert(`Failed to ${alreadyLiked ? 'unlike' : 'like'} post: ${error.message}`);
+    }
+  };
+
+  const handleCreateComment = async (postId, commentContent) => {
+    if (!appUser || !appUser.id) { alert("Please connect your wallet to comment."); return null; }
+    if (!commentContent.trim()) { alert("Comment cannot be empty."); return null; }
+    const commentToInsert = { post_id: postId, user_id: appUser.id, content: commentContent.trim() };
+    try {
+      const { data: createdComment, error } = await supabase.from('comments').insert(commentToInsert)
+        .select(`*, profiles:comments_user_id_fkey (id, username, display_name, avatar_url, sui_address)`).single();
+      if (error) { throw error; }
+      const authorProfile = createdComment.profiles;
+      const newCommentForUI = {
+        id: createdComment.id, content: createdComment.content,
+        created_at: new Date(createdComment.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        user: { 
+          id: authorProfile?.id, name: authorProfile?.display_name || authorProfile?.username,
+          username: authorProfile?.username, avatar: authorProfile?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${authorProfile?.sui_address || createdComment.user_id}`,
+          sui_address: authorProfile?.sui_address,
+        }
+      };
+      setPosts(prevPosts => prevPosts.map(post => {
+        if (post.id === postId) {
+          return { ...post,
+            commentsCount: (post.commentsCount || 0) + 1,
+            comments: [newCommentForUI, ...(post.comments || [])], 
+            areCommentsFetched: true, 
+          };
+        }
+        return post;
+      }));
+      console.log("Comment created and optimistically added:", newCommentForUI);
+      return newCommentForUI; 
+    } catch (error) { console.error("Error creating comment:", error.message); alert(`Failed to post comment: ${error.message}`); return null; }
+  };
+
+  const fetchCommentsForPost = async (postId) => {
+    console.log(`Fetching comments for post ID: ${postId}`);
+    try {
+      const { data: fetchedComments, error } = await supabase
+        .from('comments')
+        .select(`
+          id, content, created_at, user_id,
+          profiles:comments_user_id_fkey (id, username, display_name, avatar_url, sui_address)
+        `)
+        .eq('post_id', postId)
+        .order('created_at', { ascending: true }); 
+
+      if (error) {
+        console.error(`Error fetching comments for post ${postId}:`, error.message);
+        throw error;
+      }
+
+      const formattedComments = fetchedComments.map(comment => {
+        const authorProfile = comment.profiles;
+        return {
+          id: comment.id,
+          content: comment.content,
+          created_at: new Date(comment.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          user: {
+            id: authorProfile?.id,
+            name: authorProfile?.display_name || authorProfile?.username || 'Unknown User',
+            username: authorProfile?.username || 'unknown_user',
+            avatar: authorProfile?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${authorProfile?.sui_address || comment.user_id}`,
+            sui_address: authorProfile?.sui_address,
+          }
+        };
+      });
+
+      setPosts(prevPosts => prevPosts.map(post => {
+        if (post.id === postId) {
+          return {
+            ...post,
+            comments: formattedComments,
+            areCommentsFetched: true, 
+            commentsCount: formattedComments.length 
+          };
+        }
+        return post;
+      }));
+      console.log(`Successfully fetched ${formattedComments.length} comments for post ${postId}`);
+    } catch (error) {
+      console.error(`Failed to fetch comments for post ${postId}:`, error);
+    }
+  };
+
+  const handleCreateLaunchpadProject = (newProject) => { 
     setLaunchpadProjectsList(prevProjects => [newProject, ...prevProjects]);
     console.log("New launchpad project created (simulated):", newProject);
   };
-  
-  const handleTrade = (action, token, amount) => {
+  const handleTrade = (action, token, amount) => { 
     if (!appUser) { alert("Please connect wallet to trade."); return; }
     console.log(`Simulated trade: ${action} ${amount} of ${token.symbol} for user ${appUser.sui_address}`);
     alert(`This would ${action} ${amount} ${token.symbol}. Backend/SUI interaction needed.`);
   };
-
-  const handleSendTransaction = (tokenSymbol, amount, recipientAddress) => {
+  const handleSendTransaction = (tokenSymbol, amount, recipientAddress) => { 
     if (!appUser) { alert("Please connect wallet to send transactions."); return; }
     console.log(`Simulated send: ${amount} ${tokenSymbol} to ${recipientAddress} from ${appUser.sui_address}`);
     alert(`This would send ${amount} ${tokenSymbol} to ${recipientAddress}. Backend/SUI interaction needed.`);
   };
-  
-  const handleDisconnect = () => {
+  const handleDisconnect = () => { 
     disconnectWallet();
     handleNavigation('home');
   };
@@ -254,11 +383,10 @@ const App = () => {
     { id: 'trading', label: 'Trade', icon: Repeat },
     { id: 'wallet', label: 'Wallet', icon: Wallet },
   ];
-
   const combinedIsLoading = isLoading || (currentWallet && isProfileLoading); 
 
-  if (combinedIsLoading) {
-    return (
+  if (combinedIsLoading) { 
+    return ( 
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <svg className="animate-spin h-12 w-12 text-blue-600 dark:text-blue-400 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -268,7 +396,7 @@ const App = () => {
           <p className="text-xl font-semibold">Loading SocialFi Platform...</p>
         </div>
       </div>
-    );
+    ); 
   }
 
   const renderPage = () => {
@@ -282,9 +410,9 @@ const App = () => {
 
     switch (currentPage) {
       case 'home':
-        return <HomePage user={userPropsForPage} posts={posts} isPostsLoading={isPostsLoading} trendingTokens={trendingTokensList} launchpadProjects={launchpadProjectsList} onNavigate={handleNavigation} onPostCreate={handleCreatePost} />;
+        return <HomePage user={userPropsForPage} posts={posts} isPostsLoading={isPostsLoading} trendingTokens={trendingTokensList} launchpadProjects={launchpadProjectsList} onNavigate={handleNavigation} onPostCreate={handleCreatePost} onLikeToggle={handleLikeToggle} onCreateComment={handleCreateComment} onFetchComments={fetchCommentsForPost} />;
       case 'profile':
-        return userPropsForPage ? <ProfilePage user={userPropsForPage} allPosts={posts} isPostsLoading={isPostsLoading} onNavigate={handleNavigation} /> : <div className="p-6 text-center">Please connect wallet to view profile.</div>;
+        return userPropsForPage ? <ProfilePage user={userPropsForPage} allPosts={posts} isPostsLoading={isPostsLoading} onNavigate={handleNavigation} onLikeToggle={handleLikeToggle} onCreateComment={handleCreateComment} onFetchComments={fetchCommentsForPost} appUserId={appUser?.id} /> : <div className="p-6 text-center">Please connect wallet to view profile.</div>;
       case 'launchpad':
         return <LaunchpadPage launchpadProjects={launchpadProjectsList} onNavigate={handleNavigation} onCreateLaunchpadProject={handleCreateLaunchpadProject} />;
       case 'trading':
@@ -294,7 +422,7 @@ const App = () => {
       case 'settings':
         return userPropsForPage ? <SettingsPage user={userPropsForPage} onUpdateUser={handleUpdateUser} onToggleTheme={toggleTheme} currentTheme={theme} /> : <div className="p-6 text-center">Please connect wallet to view settings.</div>;
       default:
-        return <HomePage user={userPropsForPage} posts={posts} isPostsLoading={isPostsLoading} trendingTokens={trendingTokensList} launchpadProjects={launchpadProjectsList} onNavigate={handleNavigation} onPostCreate={handleCreatePost}/>;
+        return <HomePage user={userPropsForPage} posts={posts} isPostsLoading={isPostsLoading} trendingTokens={trendingTokensList} launchpadProjects={launchpadProjectsList} onNavigate={handleNavigation} onPostCreate={handleCreatePost} onLikeToggle={handleLikeToggle} onCreateComment={handleCreateComment} onFetchComments={fetchCommentsForPost} />;
     }
   };
 
