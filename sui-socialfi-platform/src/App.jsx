@@ -744,7 +744,7 @@ const App = () => {
               <div className="flex-shrink-0">
                 <span onClick={() => handleNavigation('home')} className="text-2xl font-bold text-blue-600 dark:text-blue-400 cursor-pointer flex items-center">
                 <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"></path><path d="M12 12l4.24 4.24"></path><path d="M12 12l-4.24-4.24"></path><path d="M12 12l4.24-4.24"></path><path d="M12 12l-4.24 4.24"></path></svg>
-                  SuiSocial
+                  Splash
                 </span>
               </div>
               <div className="hidden md:block">
@@ -948,7 +948,7 @@ const App = () => {
       </main>
       <footer className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
         <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 text-center">
-          <p className="text-sm text-gray-500 dark:text-gray-400"> &copy; {new Date().getFullYear()} SuiSocialFi Platform. All rights reserved. </p>
+          <p className="text-sm text-gray-500 dark:text-gray-400"> &copy; {new Date().getFullYear()} Splash Platform. All rights reserved. </p>
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-1"> Built for the SUI Network. By the community, for the community. </p>
         </div>
       </footer>
