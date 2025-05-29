@@ -1,9 +1,10 @@
 // src/pages/ProfilePage.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import Input from '../components/Input';
-import { MessageSquare, Wallet, Activity, ThumbsUp, Share2, Loader2, Heart, User as UserIcon, RefreshCw } from 'lucide-react';
+import { MessageSquare, Wallet, Activity, ThumbsUp, Share2, Loader2, Heart, User as UserIcon, RefreshCw, UserPlus, UserMinus } from 'lucide-react';
+import { supabase } from '../supabaseClient'; 
 
 const CommentDisplay = ({ comment }) => ( 
   <div className="mt-2 flex items-start space-x-2 text-xs p-2 bg-gray-50 dark:bg-gray-700 rounded">
@@ -21,7 +22,7 @@ const CommentDisplay = ({ comment }) => (
   </div>
 );
 
-const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, loggedInUser }) => { 
+const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, loggedInUser, onNavigate }) => { 
   const [commentInput, setCommentInput] = useState('');
   const [showComments, setShowComments] = useState(false); 
   const [isFetchingPostComments, setIsFetchingPostComments] = useState(false);
@@ -46,8 +47,27 @@ const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, logged
   return (
     <Card>
       <div className="flex items-start space-x-3">
-        <img src={post.user?.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${post.user?.sui_address || post.user?.username || post.user_id}`} alt={post.user?.name || post.user?.username} className="w-10 h-10 rounded-full object-cover" onError={(e) => { e.target.onerror = null; e.target.src=`https://api.dicebear.com/7.x/initials/svg?seed=${post.user?.name || post.user?.username || 'P'}`}} />
-        <div> <div className="flex items-center space-x-2"> <span className="font-semibold text-gray-900 dark:text-white">{post.user?.name || post.user?.username}</span> <span className="text-xs text-gray-500 dark:text-gray-400"> @{post.user?.username || 'anon'} · {post.timestamp} </span> </div> <p className="mt-1 text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{post.content}</p> </div>
+        <div 
+          className="flex-shrink-0 cursor-pointer hover:opacity-80"
+          onClick={() => post.user?.sui_address && onNavigate('profile', { suiAddress: post.user.sui_address })}
+        >
+            <img src={post.user?.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${post.user?.sui_address || post.user?.username || post.user_id}`} 
+                 alt={post.user?.name || post.user?.username} 
+                 className="w-10 h-10 rounded-full object-cover" 
+                 onError={(e) => { e.target.onerror = null; e.target.src=`https://api.dicebear.com/7.x/initials/svg?seed=${post.user?.name || post.user?.username || 'P'}`}} 
+            />
+        </div>
+        <div> 
+            <div 
+                className="flex items-baseline space-x-2 cursor-pointer hover:opacity-80"
+                onClick={() => post.user?.sui_address && onNavigate('profile', { suiAddress: post.user.sui_address })}
+            >
+                <span className="font-semibold text-gray-900 dark:text-white">{post.user?.name || post.user?.username}</span> 
+                <span className="text-xs text-gray-500 dark:text-gray-400"> @{post.user?.username || 'anon'}</span> 
+            </div>
+            <span className="text-xs text-gray-500 dark:text-gray-400">· {post.timestamp} </span>
+            <p className="mt-1 text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{post.content}</p> 
+        </div>
       </div>
       {post.media && <img src={post.media} alt="Post media" className="mt-2 rounded-lg w-full" />}
        <div className="mt-3 flex justify-around items-center text-gray-500 dark:text-gray-400 border-t dark:border-gray-700 pt-2 text-sm">
@@ -72,44 +92,135 @@ const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, logged
 };
 
 
-const ProfilePage = ({ user, allPosts, isPostsLoading, onNavigate, onLikeToggle, onCreateComment, onFetchComments, appUserId }) => {
-  const [activeTab, setActiveTab] = useState('posts');
+const ProfilePage = ({ appUser, profileSuiAddress, allPosts, isAppUserPostsLoading, onNavigate, onLikeToggle, onCreateComment, onFetchComments, onFollow, onUnfollow }) => {
+  const [profileUser, setProfileUser] = useState(null); 
+  const [isProfileDataLoading, setIsProfileDataLoading] = useState(true);
   const [userPosts, setUserPosts] = useState([]);
+  const [isCurrentUserFollowingThisProfile, setIsCurrentUserFollowingThisProfile] = useState(false);
+  const [activeTab, setActiveTab] = useState('posts');
+
+  const getCountSafely = (countArray) => {
+    if (Array.isArray(countArray) && countArray.length > 0) {
+      const firstElement = countArray[0];
+      if (firstElement && typeof firstElement.count === 'number') {
+        return firstElement.count;
+      }
+    }
+    return 0;
+  };
+
+  const fetchDisplayedUserProfileData = useCallback(async () => {
+    const targetSuiAddress = profileSuiAddress || appUser?.sui_address;
+    if (!targetSuiAddress) {
+      setIsProfileDataLoading(false); setProfileUser(null); return;
+    }
+    
+    if (appUser && appUser.sui_address === targetSuiAddress && typeof appUser.followers_count === 'number') {
+        setProfileUser(appUser); setIsCurrentUserFollowingThisProfile(false); setIsProfileDataLoading(false); return;
+    }
+    
+    setIsProfileDataLoading(true);
+    try {
+      const { data, error } = await supabase.from('profiles')
+        .select(`*, following_count:follows!follower_id(count), followers_count:follows!following_id(count)`)
+        .eq('sui_address', targetSuiAddress).single();
+
+      if (error) {
+        if (error.code !== 'PGRST116') console.error("Error fetching profile user data:", error.message, error); 
+        setProfileUser(null); 
+        if (error.code !== 'PGRST116') throw error;
+      }
+
+      if (data) {
+        const fetchedProfile = { ...data,
+            following_count: getCountSafely(data.following_count),
+            followers_count: getCountSafely(data.followers_count),
+            suiBalance: data.suiBalance || (appUser && appUser.sui_address === targetSuiAddress ? appUser.suiBalance : Math.random() * 10), 
+            tokens: data.tokens || (appUser && appUser.sui_address === targetSuiAddress ? appUser.tokens : []), 
+        };
+        setProfileUser(fetchedProfile);
+        if (appUser && appUser.id && data.id && appUser.id !== data.id) {
+          const { count: followCount, error: followCheckError } = await supabase
+            .from('follows').select('*', { count: 'exact', head: true })
+            .match({ follower_id: appUser.id, following_id: data.id });
+          
+          if (followCheckError) { console.error("Error checking follow status:", followCheckError.message); }
+          else { setIsCurrentUserFollowingThisProfile(typeof followCount === 'number' && followCount > 0); }
+        } else { setIsCurrentUserFollowingThisProfile(false); }
+      } else {
+        setProfileUser(null);
+        console.warn("ProfilePage: Profile fetch returned no data for address:", targetSuiAddress);
+      }
+    } catch (err) { 
+        console.error("ProfilePage: Exception during profile data fetch:", err); 
+        setProfileUser(null);
+    } finally { setIsProfileDataLoading(false); }
+  }, [profileSuiAddress, appUser]); 
 
   useEffect(() => {
-    if (user && allPosts) {
-      const filteredPosts = allPosts.filter(post => post.user_id === user.id);
-      setUserPosts(filteredPosts);
-    } else {
-      setUserPosts([]);
-    }
-  }, [user, allPosts]);
+    fetchDisplayedUserProfileData();
+  }, [fetchDisplayedUserProfileData]);
 
-  if (!user) {
-    return (
-        <div className="p-6 text-center">
-            <p>User profile not available.</p>
-            <Button className="mt-4" onClick={() => onNavigate('home')}>Go to Home</Button>
-        </div>
-    );
+  useEffect(() => {
+    if (profileUser && allPosts) {
+      const filteredPosts = allPosts.filter(post => post.user_id === profileUser.id);
+      setUserPosts(filteredPosts);
+    } else { setUserPosts([]); }
+  }, [profileUser, allPosts]);
+
+  const handleFollowToggle = async () => {
+    if (!appUser || !profileUser || appUser.id === profileUser.id) { alert("You must be logged in to follow users."); return; }
+    let success;
+    if (isCurrentUserFollowingThisProfile) { success = await onUnfollow(profileUser.id);
+    } else { success = await onFollow(profileUser.id); }
+    if (success) { 
+        setIsCurrentUserFollowingThisProfile(!isCurrentUserFollowingThisProfile);
+        setProfileUser(prev => {
+            if (!prev) return null;
+            return {
+                ...prev,
+                followers_count: isCurrentUserFollowingThisProfile ? Math.max(0, (prev.followers_count || 0) - 1) : (prev.followers_count || 0) + 1
+            };
+        });
+    } 
+  };
+
+  if (isProfileDataLoading && !profileUser) { 
+    return ( <div className="p-6 text-center"> <Loader2 className="animate-spin h-12 w-12 mx-auto text-blue-500" /> <p>Loading profile...</p> </div> );
+  }
+  if (!profileUser) { 
+    return ( <div className="p-6 text-center"> <p>Profile not found or could not be loaded.</p> <Button className="mt-4" onClick={() => onNavigate('home')}>Go to Home</Button> </div> );
   }
   
-  const isOwnProfile = appUserId && user && appUserId === user.id;
+  const isOwnProfile = appUser && profileUser && appUser.id === profileUser.id;
 
   return (
     <div className="p-4 sm:p-6">
       <Card className="mb-6 overflow-hidden">
         <div className="h-32 sm:h-48 bg-gradient-to-r from-cyan-500 to-blue-500 dark:from-cyan-700 dark:to-blue-700 relative">
             <img 
-                src={user.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${user.sui_address || user.username || user.id}`} 
-                alt={user.name || user.username} 
+                src={profileUser.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${profileUser.sui_address || profileUser.username || profileUser.id}`} 
+                alt={profileUser.display_name || profileUser.username} 
                 className="w-24 h-24 sm:w-32 sm:h-32 rounded-full border-4 border-white dark:border-gray-800 absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1/2 shadow-lg object-cover"
-                onError={(e) => { e.target.onerror = null; e.target.src=`https://api.dicebear.com/7.x/initials/svg?seed=${user.name || user.username || 'SUI'}`}}
+                onError={(e) => { e.target.onerror = null; e.target.src=`https://api.dicebear.com/7.x/initials/svg?seed=${profileUser.display_name || profileUser.username || 'SUI'}`}}
             />
         </div>
-        <div className="pt-16 sm:pt-20 text-center"> <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">{user.name || user.username}</h2> <p className="text-gray-600 dark:text-gray-400">@{user.username || 'sui_user'}</p> <p className="mt-2 text-sm text-gray-700 dark:text-gray-300 max-w-md mx-auto px-4">{user.bio || 'No bio yet.'}</p> </div>
-        <div className="flex justify-center space-x-4 sm:space-x-8 mt-4 pb-6 border-b dark:border-gray-700"> <div className="text-center"> <p className="font-semibold text-lg text-gray-900 dark:text-white">{userPosts.length}</p> <p className="text-sm text-gray-500 dark:text-gray-400">Posts</p> </div> <div className="text-center"> <p className="font-semibold text-lg text-gray-900 dark:text-white">{user.followers || 0}</p> <p className="text-sm text-gray-500 dark:text-gray-400">Followers</p> </div> <div className="text-center"> <p className="font-semibold text-lg text-gray-900 dark:text-white">{user.following || 0}</p> <p className="text-sm text-gray-500 dark:text-gray-400">Following</p> </div> </div>
-        {isOwnProfile && ( <div className="flex justify-center mt-4 mb-2"> <Button variant="primary" onClick={() => onNavigate('settings')}>Edit Profile</Button> </div> )}
+        <div className="pt-16 sm:pt-20 text-center"> <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">{profileUser.display_name || profileUser.username}</h2> <p className="text-gray-600 dark:text-gray-400">@{profileUser.username || 'sui_user'}</p> <p className="mt-2 text-sm text-gray-700 dark:text-gray-300 max-w-md mx-auto px-4">{profileUser.bio || 'No bio yet.'}</p> </div>
+        <div className="flex justify-center items-center space-x-4 sm:space-x-8 mt-4 pb-6 border-b dark:border-gray-700"> <div className="text-center"> <p className="font-semibold text-lg text-gray-900 dark:text-white">{userPosts.length}</p> <p className="text-sm text-gray-500 dark:text-gray-400">Posts</p> </div> <div className="text-center"> <p className="font-semibold text-lg text-gray-900 dark:text-white">{profileUser.followers_count || 0}</p> <p className="text-sm text-gray-500 dark:text-gray-400">Followers</p> </div> <div className="text-center"> <p className="font-semibold text-lg text-gray-900 dark:text-white">{profileUser.following_count || 0}</p> <p className="text-sm text-gray-500 dark:text-gray-400">Following</p> </div> </div>
+        <div className="flex justify-center mt-4 mb-2 space-x-2">
+            {isOwnProfile ? (
+                <Button variant="primary" onClick={() => onNavigate('settings')}>Edit Profile</Button>
+            ) : appUser ? ( 
+                <Button 
+                    onClick={handleFollowToggle} 
+                    variant={isCurrentUserFollowingThisProfile ? "secondary" : "primary"}
+                    icon={isCurrentUserFollowingThisProfile ? UserMinus : UserPlus}
+                    disabled={!profileUser.id} 
+                >
+                    {isCurrentUserFollowingThisProfile ? "Unfollow" : "Follow"}
+                </Button>
+            ) : null }
+        </div>
       </Card>
 
       <div className="mb-6 border-b border-gray-200 dark:border-gray-700">
@@ -119,18 +230,17 @@ const ProfilePage = ({ user, allPosts, isPostsLoading, onNavigate, onLikeToggle,
       <div>
         {activeTab === 'posts' && (
           <div className="space-y-6">
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Posts by {user.name || user.username}</h3>
-            {isPostsLoading && userPosts.length === 0 ? (
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Posts by {profileUser.display_name || profileUser.username}</h3>
+            {isAppUserPostsLoading && userPosts.length === 0 ? (
                 <Card className="text-center py-8"> <Loader2 size={48} className="mx-auto text-blue-500 animate-spin mb-4" /> <p className="text-lg font-semibold">Loading posts...</p> </Card>
             ) : userPosts.length > 0 ? (
               userPosts.map(post => (
                 <PostCard 
-                  key={post.id} 
-                  post={post} 
-                  onLikeToggle={onLikeToggle} 
-                  onCreateComment={onCreateComment}
+                  key={post.id} post={post} 
+                  onLikeToggle={onLikeToggle} onCreateComment={onCreateComment}
                   onFetchComments={onFetchComments} 
-                  loggedInUser={appUserId === user.id ? user : null} // Pass appUser if viewing own profile, else null for comment input
+                  loggedInUser={appUser} 
+                  onNavigate={onNavigate}
                 />
               ))
             ) : (
@@ -140,23 +250,31 @@ const ProfilePage = ({ user, allPosts, isPostsLoading, onNavigate, onLikeToggle,
         )}
         {activeTab === 'tokens' && (
           <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Tokens Held by {user.name || user.username}</h3>
-            {(user.tokens && user.tokens.length > 0) ? (
-              user.tokens.map(token => (
-                <Card key={token.id || token.symbol} className="flex items-center justify-between">
-                  <div className="flex items-center">
-                    <img src={token.logo} alt={token.name} className="w-10 h-10 rounded-full mr-3 object-cover" />
-                    <div>
-                      <p className="font-semibold text-gray-900 dark:text-white">{token.name} ({token.symbol})</p>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Balance: {(token.balance || 0).toLocaleString()} {token.symbol}</p>
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Tokens Held by {profileUser.display_name || profileUser.username}</h3>
+            {(profileUser.tokens && profileUser.tokens.length > 0) ? (
+              profileUser.tokens.map(token => {
+                const displayValue = ((token.balance || 0) * (token.price || 0)).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                });
+                const displayPrice = typeof token.price === 'number' ? `$${token.price.toFixed(2)}` : 'N/A';
+
+                return (
+                  <Card key={token.id || token.symbol} className="flex items-center justify-between">
+                    <div className="flex items-center">
+                      <img src={token.logo} alt={token.name} className="w-10 h-10 rounded-full mr-3 object-cover" />
+                      <div>
+                        <p className="font-semibold text-gray-900 dark:text-white">{token.name} ({token.symbol})</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Balance: {(token.balance || 0).toLocaleString()} {token.symbol}</p>
+                      </div>
                     </div>
-                  </div>
-                  <div className="text-right">
-                     <p className="font-semibold text-gray-900 dark:text-white">${((token.balance || 0) * (token.price || 0)).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
-                     <p className="text-sm text-gray-500 dark:text-gray-400">Price: ${token.price || 'N/A'}</p>
-                  </div>
-                </Card>
-              ))
+                    <div className="text-right">
+                       <p className="font-semibold text-gray-900 dark:text-white">${displayValue}</p>
+                       <p className="text-sm text-gray-500 dark:text-gray-400">Price: {displayPrice}</p>
+                    </div>
+                  </Card>
+                );
+              })
             ) : (
               <Card className="text-center py-8">
                 <Wallet size={48} className="mx-auto text-gray-400 dark:text-gray-500 mb-2" />

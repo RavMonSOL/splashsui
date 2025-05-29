@@ -5,8 +5,9 @@ import Button from '../components/Button';
 import Modal from '../components/Modal';
 import Textarea from '../components/Textarea';
 import Input from '../components/Input'; 
-import { ThumbsUp, MessageSquare, Share2, PlusCircle, Shield, TrendingUp, Rocket, Loader2, Heart, RefreshCw } from 'lucide-react';
+import { ThumbsUp, MessageSquare, Share2, PlusCircle, Shield, TrendingUp, Rocket, Loader2, Heart, RefreshCw, Users, Globe } from 'lucide-react';
 
+// Simple Comment Component (can be moved to its own file later)
 const CommentDisplay = ({ comment }) => ( 
   <div className="mt-2 flex items-start space-x-2 text-xs p-2 bg-gray-50 dark:bg-gray-700 rounded">
     <img 
@@ -23,26 +24,49 @@ const CommentDisplay = ({ comment }) => (
   </div>
 );
 
-const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, loggedInUser }) => {
+
+// Post Card Component (can be moved to its own file later)
+const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, loggedInUser, onNavigate }) => {
   const [commentInput, setCommentInput] = useState('');
   const [showComments, setShowComments] = useState(false); 
   const [isFetchingPostComments, setIsFetchingPostComments] = useState(false);
 
   const handleCommentSubmit = async () => {
-    if (!commentInput.trim()) { alert("Comment cannot be empty."); return; }
-    if (!loggedInUser) { alert("Please connect your wallet to comment."); return; }
+    if (!commentInput.trim()) {
+        alert("Comment cannot be empty.");
+        return;
+    }
+    if (!loggedInUser) {
+        alert("Please connect your wallet to comment.");
+        return;
+    }
     const newComment = await onCreateComment(post.id, commentInput);
-    if (newComment) { setCommentInput(''); if (!showComments) { setShowComments(true); } }
+    if (newComment) { // onCreateComment in App.jsx now returns the new comment or null
+      setCommentInput(''); 
+      // If comments weren't shown, show them now that a new one is added.
+      if (!showComments) {
+          setShowComments(true);
+          // If comments weren't fetched yet for this post, fetch them.
+          // The new comment is added optimistically, but fetching ensures others are loaded.
+          if (!post.areCommentsFetched && post.commentsCount > 0) { // Check commentsCount before fetching
+            setIsFetchingPostComments(true);
+            await onFetchComments(post.id);
+            setIsFetchingPostComments(false);
+          }
+      }
+    }
   };
 
   const toggleAndFetchComments = async () => {
     const newShowCommentsState = !showComments;
     setShowComments(newShowCommentsState);
+    // If expanding comments and they haven't been fetched yet AND there are comments to fetch
     if (newShowCommentsState && !post.areCommentsFetched && post.commentsCount > 0) {
       setIsFetchingPostComments(true);
       await onFetchComments(post.id);
       setIsFetchingPostComments(false);
     } else if (newShowCommentsState && post.commentsCount > 0 && post.comments.length === 0 && post.areCommentsFetched === false ) {
+      // This case handles if optimistic update added a comment but full list wasn't fetched
       setIsFetchingPostComments(true);
       await onFetchComments(post.id);
       setIsFetchingPostComments(false);
@@ -54,20 +78,34 @@ const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, logged
   return (
     <Card>
       <div className="flex items-start space-x-3">
-        <img 
-          src={post.user?.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${post.user?.sui_address || post.user?.username || post.user_id}`} 
-          alt={post.user?.name || post.user?.username} 
-          className="w-12 h-12 rounded-full object-cover" 
-          onError={(e) => { e.target.onerror = null; e.target.src=`https://api.dicebear.com/7.x/initials/svg?seed=${post.user?.name || 'P'}`}}
-        />
+        <div 
+          className="flex-shrink-0 cursor-pointer hover:opacity-80"
+          onClick={() => post.user?.sui_address && onNavigate('profile', { suiAddress: post.user.sui_address })}
+        >
+          <img 
+            src={post.user?.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${post.user?.sui_address || post.user?.username || post.user_id}`} 
+            alt={post.user?.name || post.user?.username} 
+            className="w-12 h-12 rounded-full object-cover" 
+            onError={(e) => { e.target.onerror = null; e.target.src=`https://api.dicebear.com/7.x/initials/svg?seed=${post.user?.name || 'P'}`}}
+          />
+        </div>
         <div>
-          <div className="flex items-center space-x-2">
+          <div 
+            className="flex items-baseline space-x-1 cursor-pointer hover:opacity-80" // Reduced space-x-2 to space-x-1
+            onClick={() => post.user?.sui_address && onNavigate('profile', { suiAddress: post.user.sui_address })}
+          >
             <span className="font-semibold text-gray-900 dark:text-white">{post.user?.name || post.user?.username || 'Anonymous'}</span>
             <span className="text-sm text-gray-500 dark:text-gray-400">
-              @{post.user?.username || 'anon'} · {post.timestamp}
+              @{post.user?.username || 'anon'}
             </span>
           </div>
-          {post.tokenGated && ( <div className="mt-1 flex items-center text-xs text-purple-600 dark:text-purple-400 bg-purple-100 dark:bg-purple-900 px-2 py-0.5 rounded-full w-fit"> <Shield size={14} className="mr-1" /> Token Gated: Requires ${post.requiredToken || 'specific token'} </div> )}
+           <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">· {post.timestamp}</span> {/* Added ml-1 for spacing */}
+          {post.tokenGated && ( 
+            <div className="mt-1 flex items-center text-xs text-purple-600 dark:text-purple-400 bg-purple-100 dark:bg-purple-900 px-2 py-0.5 rounded-full w-fit">
+              <Shield size={14} className="mr-1" />
+              Token Gated: Requires ${post.requiredToken || 'specific token'}
+            </div>
+          )}
           <p className="mt-2 text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{post.content}</p>
         </div>
       </div>
@@ -112,7 +150,7 @@ const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, logged
             </div>
           ) : (
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              {post.commentsCount > 0 ? "No comments loaded yet. Click 'Comment' or 'Refresh'." : "No comments yet. Be the first!"}
+              {post.commentsCount > 0 ? "No comments loaded. Click 'Comment' or 'Refresh'." : "No comments yet. Be the first!"}
             </p>
           )}
           {loggedInUser && (
@@ -132,7 +170,11 @@ const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, logged
 };
 
 
-const HomePage = ({ user, posts, isPostsLoading, trendingTokens, launchpadProjects, onNavigate, onPostCreate, onLikeToggle, onCreateComment, onFetchComments }) => {
+const HomePage = ({ 
+    user, posts, isPostsLoading, trendingTokens, launchpadProjects, 
+    onNavigate, onPostCreate, onLikeToggle, onCreateComment, onFetchComments,
+    activeFeedType, setActiveFeedType 
+}) => {
   const [newPostContent, setNewPostContent] = useState("");
   const [showCreatePostModal, setShowCreatePostModal] = useState(false);
 
@@ -174,14 +216,40 @@ const HomePage = ({ user, posts, isPostsLoading, trendingTokens, launchpadProjec
           </Card>
         )}
 
+        <div className="flex space-x-2 mb-4 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg sticky top-[calc(4rem+1px)] z-30 backdrop-blur-sm bg-opacity-80 dark:bg-opacity-80">
+            <Button
+                variant={activeFeedType === 'global' ? 'primary' : 'secondary'}
+                onClick={() => setActiveFeedType('global')}
+                className="flex-1 !py-2 !px-3 !text-sm shadow-sm"
+                icon={Globe}
+            >
+                Global Feed
+            </Button>
+            {user && (
+                 <Button
+                    variant={activeFeedType === 'following' ? 'primary' : 'secondary'}
+                    onClick={() => setActiveFeedType('following')}
+                    className="flex-1 !py-2 !px-3 !text-sm shadow-sm"
+                    icon={Users}
+                >
+                    Following
+                </Button>
+            )}
+        </div>
+
         {isPostsLoading && (!posts || posts.length === 0) ? (
           <Card className="text-center py-8"> <Loader2 size={48} className="mx-auto text-blue-500 animate-spin mb-4" /> <p className="text-lg font-semibold">Loading posts...</p> </Card>
         ) : posts && posts.length > 0 ? (
           posts.map(post => (
-            <PostCard key={post.id} post={post} onLikeToggle={onLikeToggle} onCreateComment={onCreateComment} onFetchComments={onFetchComments} loggedInUser={user} />
+            <PostCard key={post.id} post={post} onLikeToggle={onLikeToggle} onCreateComment={onCreateComment} onFetchComments={onFetchComments} loggedInUser={user} onNavigate={onNavigate} />
           ))
         ) : !isPostsLoading && posts && posts.length === 0 ? (
-          <Card className="text-center py-8"> <MessageSquare size={48} className="mx-auto text-gray-400 dark:text-gray-500 mb-2" /> <p className="text-gray-500 dark:text-gray-400">No posts yet. Be the first to share something!</p> </Card>
+          <Card className="text-center py-8"> 
+            <MessageSquare size={48} className="mx-auto text-gray-400 dark:text-gray-500 mb-2" /> 
+            <p className="text-gray-500 dark:text-gray-400">
+                {activeFeedType === 'following' && user ? "You're not following anyone yet, or the users you follow haven't posted." : "No posts yet. Be the first to share something!"}
+            </p>
+          </Card>
         ) : null}
       </div>
       <div className="space-y-6">
