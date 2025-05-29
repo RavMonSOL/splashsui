@@ -129,8 +129,8 @@ const ProfilePage = ({ user, allPosts, isPostsLoading, onNavigate, onLikeToggle,
                   post={post} 
                   onLikeToggle={onLikeToggle} 
                   onCreateComment={onCreateComment}
-                  onFetchComments={onFetchComments} // Pass down onFetchComments
-                  loggedInUser={appUserId === user.id ? user : null} // Pass appUser as loggedInUser
+                  onFetchComments={onFetchComments} 
+                  loggedInUser={appUserId === user.id ? user : null} // Pass appUser if viewing own profile, else null for comment input
                 />
               ))
             ) : (

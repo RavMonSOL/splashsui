@@ -42,7 +42,7 @@ const PostCard = ({ post, onLikeToggle, onCreateComment, onFetchComments, logged
       setIsFetchingPostComments(true);
       await onFetchComments(post.id);
       setIsFetchingPostComments(false);
-    } else if (newShowCommentsState && post.commentsCount > 0 && post.comments.length === 0 && post.areCommentsFetched === false /* Only fetch if not already fetched or if explicitly refreshing */) {
+    } else if (newShowCommentsState && post.commentsCount > 0 && post.comments.length === 0 && post.areCommentsFetched === false ) {
       setIsFetchingPostComments(true);
       await onFetchComments(post.id);
       setIsFetchingPostComments(false);

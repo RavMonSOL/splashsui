@@ -55,7 +55,7 @@ const App = () => {
   const currentWallet = useCurrentAccount();
   const { mutate: disconnectWallet } = useDisconnectWallet();
 
-  useEffect(() => { 
+  useEffect(() => {
     const timer = setTimeout(() => setIsLoading(false), 300);
     const savedTheme = localStorage.getItem('socialfi-theme') || 'light';
     setTheme(savedTheme);
@@ -63,7 +63,7 @@ const App = () => {
     return () => clearTimeout(timer);
   }, []);
 
-  useEffect(() => { 
+  useEffect(() => {
     const fetchOrCreateUserProfile = async (suiAddress) => {
       setIsProfileLoading(true);
       let userProfileData = null; 
@@ -161,13 +161,230 @@ const App = () => {
             };
           });
           setPosts(formattedPosts);
-          console.log("Fetched posts with comment counts:", formattedPosts);
         }
       } catch (error) { console.error("Failed to fetch posts:", error.message); setPosts([]);
       } finally { setIsPostsLoading(false); }
     };
     fetchPostsFromSupabase(); 
-  }, [appUser]);
+  }, [appUser]); 
+
+  // Supabase Realtime Subscription for new posts
+  useEffect(() => {
+    if (!supabase) {
+        console.warn("Supabase client not initialized. Realtime subscription for posts skipped.");
+        return;
+    }
+
+    const handleNewPostSubscription = async (payload) => {
+      console.log('Realtime: New post received!', payload.new);
+      const newPostFromSub = payload.new;
+
+      let authorProfile = null;
+      if (newPostFromSub.user_id) {
+        try {
+            const { data: profileData, error: profileError } = await supabase
+              .from('profiles')
+              .select('id, username, display_name, avatar_url, sui_address')
+              .eq('id', newPostFromSub.user_id)
+              .single();
+            if (profileError && profileError.code !== 'PGRST116') {
+                console.error("Realtime: Error fetching profile for new post:", profileError.message);
+            } else {
+                authorProfile = profileData;
+            }
+        } catch(e) { console.error("Realtime: Exception fetching profile:", e); }
+      }
+      
+      let isLikedByThisUser = false;
+      if (appUser && appUser.id === newPostFromSub.user_id) { 
+        // For a brand new post, it wouldn't be liked yet by the creator.
+      }
+
+      const displayPost = {
+        id: newPostFromSub.id,
+        content: newPostFromSub.content,
+        media: newPostFromSub.media_url,
+        timestamp: new Date(newPostFromSub.created_at).toLocaleTimeString([], { day: 'numeric', month:'short', hour: '2-digit', minute: '2-digit' }),
+        user: {
+          id: authorProfile?.id,
+          name: authorProfile?.display_name || authorProfile?.username || 'Unknown User',
+          username: authorProfile?.username || 'unknown_user',
+          avatar: authorProfile?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${authorProfile?.sui_address || newPostFromSub.user_id}`,
+          sui_address: authorProfile?.sui_address,
+        },
+        user_id: newPostFromSub.user_id,
+        likes: 0, 
+        isLikedByCurrentUser: isLikedByThisUser,
+        commentsCount: 0, 
+        comments: [],
+        areCommentsFetched: true, 
+        sharesCount: 0,
+      };
+
+      setPosts(prevPosts => {
+        if (prevPosts.find(p => p.id === newPostFromSub.id)) {
+          console.log("Realtime: Post already exists in local state, skipping addition.");
+          return prevPosts;
+        }
+        console.log("Realtime: Adding new post to local state:", displayPost);
+        return [displayPost, ...prevPosts];
+      });
+    };
+
+    const postChannel = supabase.channel('realtime-public-posts')
+      .on('postgres_changes', 
+          { event: 'INSERT', schema: 'public', table: 'posts' },
+          handleNewPostSubscription
+      )
+      .subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('Successfully subscribed to new posts!');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('Subscription CHANNEL_ERROR on public:posts:', err);
+        } else if (status === 'TIMED_OUT') {
+          console.warn('Subscription TIMED_OUT on public:posts');
+        } else if (status === 'CLOSED') {
+          console.log('Subscription CLOSED on public:posts');
+        } else {
+          console.log('Subscription status on public:posts:', status);
+        }
+      });
+
+    return () => {
+      if (postChannel) {
+        supabase.removeChannel(postChannel)
+          .then(() => console.log("Unsubscribed from posts channel."))
+          .catch(err => console.error("Error unsubscribing from posts channel:", err));
+      }
+    };
+  }, [appUser]); 
+
+
+  // Realtime Subscription for Likes
+  useEffect(() => {
+    if (!supabase) return; 
+
+    const handleLikeChange = (payload) => {
+      console.log('Realtime: Like change received!', payload);
+      const { eventType, new: newLike, old: oldLikeRecord } = payload;
+      const likeData = eventType === 'DELETE' ? oldLikeRecord : newLike;
+      
+      if (!likeData || !likeData.post_id || !likeData.user_id) {
+        console.warn("Realtime: Like event missing crucial data", likeData);
+        return;
+      }
+
+      setPosts(prevPosts => {
+        const postIndex = prevPosts.findIndex(p => p.id === likeData.post_id);
+        if (postIndex === -1) return prevPosts; 
+
+        const targetPost = prevPosts[postIndex];
+        let updatedLikesCount = targetPost.likes;
+        let updatedIsLikedByCurrentUser = targetPost.isLikedByCurrentUser;
+
+        if (eventType === 'INSERT') {
+          updatedLikesCount = (targetPost.likes || 0) + 1;
+          if (appUser && likeData.user_id === appUser.id) {
+            updatedIsLikedByCurrentUser = true;
+          }
+        } else if (eventType === 'DELETE') {
+          updatedLikesCount = Math.max(0, (targetPost.likes || 0) - 1);
+          if (appUser && likeData.user_id === appUser.id) {
+            updatedIsLikedByCurrentUser = false;
+          }
+        }
+        
+        if (appUser && likeData.user_id === appUser.id &&
+            targetPost.isLikedByCurrentUser === updatedIsLikedByCurrentUser &&
+            targetPost.likes === updatedLikesCount) {
+            if(eventType === 'INSERT' && targetPost.likes !== updatedLikesCount) {
+                // Continue to update if count is different, even if it's the current user
+            } else {
+                return prevPosts; 
+            }
+        }
+        
+        const updatedPosts = [...prevPosts];
+        updatedPosts[postIndex] = { ...targetPost, likes: updatedLikesCount, isLikedByCurrentUser: updatedIsLikedByCurrentUser };
+        return updatedPosts;
+      });
+    };
+
+    const likesChannel = supabase.channel('realtime-public-likes-changes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'likes' }, handleLikeChange)
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'likes' }, handleLikeChange)
+      .subscribe((status, err) => { 
+        if (status === 'SUBSCRIBED') { console.log('Successfully subscribed to likes!'); }
+        else if (status === 'CHANNEL_ERROR') { console.error('Subscription CHANNEL_ERROR on public:likes:', err); }
+       });
+    return () => { if (likesChannel) supabase.removeChannel(likesChannel); };
+  }, [appUser]); 
+
+  // Realtime Subscription for New Comments
+  useEffect(() => {
+    if (!supabase) return;
+
+    const handleNewCommentSubscription = async (payload) => {
+      console.log('Realtime: New comment received!', payload.new);
+      const newCommentFromSub = payload.new;
+
+      if (!newCommentFromSub || !newCommentFromSub.post_id || !newCommentFromSub.user_id) {
+        console.warn("Realtime: Comment event missing crucial data", newCommentFromSub);
+        return;
+      }
+
+      let authorProfile = null;
+      try {
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles').select('id, username, display_name, avatar_url, sui_address')
+          .eq('id', newCommentFromSub.user_id).single();
+        if (profileError && profileError.code !== 'PGRST116') { console.error("RT Comment: Error fetching profile:", profileError.message); }
+        else { authorProfile = profileData; }
+      } catch(e) { console.error("RT Comment: Exception fetching profile:", e); }
+
+      const formattedComment = {
+        id: newCommentFromSub.id, content: newCommentFromSub.content,
+        created_at: new Date(newCommentFromSub.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        user: {
+          id: authorProfile?.id, name: authorProfile?.display_name || authorProfile?.username || 'Unknown User',
+          username: authorProfile?.username || 'unknown_user',
+          avatar: authorProfile?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${authorProfile?.sui_address || newCommentFromSub.user_id}`,
+          sui_address: authorProfile?.sui_address,
+        }
+      };
+
+      setPosts(prevPosts => {
+        const postIndex = prevPosts.findIndex(p => p.id === newCommentFromSub.post_id);
+        if (postIndex === -1) return prevPosts;
+
+        const targetPost = prevPosts[postIndex];
+        
+        if (targetPost.comments && targetPost.comments.find(c => c.id === formattedComment.id)) {
+          console.log("RT Comment: Comment already exists in post for post ID:", newCommentFromSub.post_id);
+          return prevPosts;
+        }
+        
+        const updatedComments = [formattedComment, ...(targetPost.comments || [])];
+        const updatedPosts = [...prevPosts];
+        updatedPosts[postIndex] = {
+          ...targetPost,
+          comments: updatedComments,
+          commentsCount: (targetPost.commentsCount || 0) + 1,
+          areCommentsFetched: true 
+        };
+        console.log("RT Comment: Adding new comment to post:", newCommentFromSub.post_id);
+        return updatedPosts;
+      });
+    };
+
+    const commentsChannel = supabase.channel('realtime-public-comments-inserts')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'comments' }, handleNewCommentSubscription)
+      .subscribe((status, err) => { 
+        if (status === 'SUBSCRIBED') { console.log('Successfully subscribed to comments!'); }
+        else if (status === 'CHANNEL_ERROR') { console.error('Subscription CHANNEL_ERROR on public:comments:', err); }
+      });
+    return () => { if (commentsChannel) supabase.removeChannel(commentsChannel); };
+  }, [appUser]); 
 
 
   const toggleTheme = () => { 
@@ -224,23 +441,25 @@ const App = () => {
     if (!appUser || !appUser.id) { alert("Please connect wallet and load profile to post."); return; }
     const postToInsert = { user_id: appUser.id, content: newPostData.content, media_url: newPostData.media_url || null };
     try {
-      const { data: createdPost, error } = await supabase.from('posts').insert(postToInsert)
-        .select(`*, profiles:posts_user_id_fkey (id, username, display_name, avatar_url, sui_address)`).single();
+      const { data: createdPostRow, error } = await supabase.from('posts').insert(postToInsert).select().single();
       if (error) { throw error; }
-      const authorProfile = createdPost.profiles; 
+      console.log("Post created successfully in Supabase (row data):", createdPostRow);
+      
       const displayPost = {
-        id: createdPost.id, content: createdPost.content, media: createdPost.media_url,
-        timestamp: new Date(createdPost.created_at).toLocaleTimeString([], { day: 'numeric', month:'short', hour: '2-digit', minute: '2-digit' }),
-        user: { id: authorProfile?.id, name: authorProfile?.display_name || authorProfile?.username,
-            username: authorProfile?.username, avatar: authorProfile?.avatar_url, sui_address: authorProfile?.sui_address,
-        }, user_id: createdPost.user_id, 
+        id: createdPostRow.id, content: createdPostRow.content, media: createdPostRow.media_url,
+        timestamp: new Date(createdPostRow.created_at).toLocaleTimeString([], { day: 'numeric', month:'short', hour: '2-digit', minute: '2-digit' }),
+        user: { id: appUser.id, name: appUser.display_name || appUser.username,
+            username: appUser.username, avatar: appUser.avatar_url, sui_address: appUser.sui_address,
+        }, user_id: appUser.id, 
         likes: 0, isLikedByCurrentUser: false, 
-        commentsCount: 0, 
-        comments: [],     
-        areCommentsFetched: true,
-        sharesCount: 0,
+        commentsCount: 0, comments: [], areCommentsFetched: true, sharesCount: 0,
       };
-      setPosts(prevPosts => [displayPost, ...prevPosts]);
+      setPosts(prevPosts => {
+        if (prevPosts.find(p => p.id === displayPost.id)) {
+            return prevPosts;
+        }
+        return [displayPost, ...prevPosts];
+      });
     } catch (error) { console.error("Error creating post in Supabase:", error.message); alert(`Failed to create post: ${error.message}`); }
   };
 
@@ -250,12 +469,16 @@ const App = () => {
     if (postIndex === -1) return;
     const postToUpdate = posts[postIndex];
     const alreadyLiked = postToUpdate.isLikedByCurrentUser;
-    const updatedPosts = [...posts];
-    updatedPosts[postIndex] = { ...postToUpdate,
-      likes: alreadyLiked ? postToUpdate.likes - 1 : postToUpdate.likes + 1,
-      isLikedByCurrentUser: !alreadyLiked,
-    };
-    setPosts(updatedPosts);
+    
+    setPosts(prevPosts => prevPosts.map(p => 
+        p.id === postId 
+        ? { ...p, 
+            likes: alreadyLiked ? p.likes - 1 : p.likes + 1, 
+            isLikedByCurrentUser: !alreadyLiked 
+          } 
+        : p
+    ));
+
     try {
       if (alreadyLiked) {
         const { error } = await supabase.from('likes').delete().match({ post_id: postId, user_id: appUser.id });
@@ -266,10 +489,7 @@ const App = () => {
       }
     } catch (error) {
       console.error("Error toggling like in Supabase:", error.message);
-      setPosts(prevPosts => { 
-        const revertedPosts = [...prevPosts];
-        revertedPosts[postIndex] = postToUpdate; return revertedPosts;
-      });
+      setPosts(prevPosts => prevPosts.map(p => p.id === postId ? postToUpdate : p));
       alert(`Failed to ${alreadyLiked ? 'unlike' : 'like'} post: ${error.message}`);
     }
   };
@@ -294,6 +514,9 @@ const App = () => {
       };
       setPosts(prevPosts => prevPosts.map(post => {
         if (post.id === postId) {
+          if (post.comments && post.comments.find(c => c.id === newCommentForUI.id)) {
+            return {...post, commentsCount: Math.max(post.commentsCount || 0, (post.comments || []).length)};
+          }
           return { ...post,
             commentsCount: (post.commentsCount || 0) + 1,
             comments: [newCommentForUI, ...(post.comments || [])], 
