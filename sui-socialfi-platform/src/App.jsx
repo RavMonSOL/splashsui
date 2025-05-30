@@ -11,6 +11,8 @@ import LaunchpadPage from './pages/LaunchpadPage';
 import TradingPage from './pages/TradingPage';
 import WalletPage from './pages/WalletPage';
 import SettingsPage from './pages/SettingsPage';
+import NotificationsPage from './pages/NotificationsPage';
+
 
 // Import Helper Components
 import Button from './components/Button';
@@ -102,7 +104,7 @@ const App = () => {
         const defaultUsername = `user_${suiAddress.substring(suiAddress.length - 6)}`;
         const newProfileToInsert = { sui_address: suiAddress, username: defaultUsername,
           display_name: `SUI User ${suiAddress.substring(2, 6)}`,
-          avatar_url: `https://api.dicebear.com/7.x/identicon/svg?seed=${suiAddress}`, bio: 'New SuiSocial adventurer!',
+          avatar_url: `https://api.dicebear.com/7.x/identicon/svg?seed=${suiAddress}`, bio: 'New Splash adventurer!',
         };
         const { data: createdProfile, error: insertError } = await supabase
           .from('profiles').insert(newProfileToInsert).select().single();
@@ -131,7 +133,7 @@ const App = () => {
   
   useEffect(() => {
     const timer = setTimeout(() => setIsLoading(false), 300);
-    const savedTheme = localStorage.getItem('socialfi-theme') || 'light';
+    const savedTheme = localStorage.getItem('splash-theme') || 'light';
     setTheme(savedTheme);
     document.documentElement.classList.toggle('dark', savedTheme === 'dark');
     return () => clearTimeout(timer);
@@ -339,7 +341,6 @@ const App = () => {
 
   const fetchUserNotifications = useCallback(async () => {
     if (!appUser || !appUser.id) return;
-    console.log("Fetching notifications for user:", appUser.id);
     try {
       const { data, error } = await supabase
         .from('notifications')
@@ -357,7 +358,6 @@ const App = () => {
         setUserNotifications(data);
         const unreadCount = data.filter(n => !n.is_read).length;
         setUnreadNotificationCount(unreadCount);
-        console.log("Fetched notifications:", data.length, "Unread:", unreadCount);
       } else {
         setUserNotifications([]);
         setUnreadNotificationCount(0);
@@ -381,9 +381,7 @@ const App = () => {
   useEffect(() => {
     if (!supabase || !appUser || !appUser.id) return;
     const handleNewNotification = async (payload) => {
-      console.log('Realtime: New notification received!', payload.new);
       const newNotification = payload.new;
-
       let actorProfile = null;
       if (newNotification.actor_user_id) {
         const { data: profileData, error: profileError } = await supabase
@@ -392,7 +390,6 @@ const App = () => {
         if (profileError && profileError.code !== 'PGRST116') { console.error("RT Notif: Error fetching actor profile:", profileError.message); }
         else { actorProfile = profileData; }
       }
-      
       let postData = null;
       if (newNotification.post_id) {
           const {data: pData, error: pError} = await supabase
@@ -405,14 +402,12 @@ const App = () => {
             .from('comments').select('content').eq('id', newNotification.comment_id).single();
         if(!cError && cData) commentData = cData;
       }
-
       const formattedNotification = {
         ...newNotification,
         actor: actorProfile, 
         post: postData ? { id: newNotification.post_id, content: postData.content.substring(0,50) } : null,
         comment: commentData ? { id: newNotification.comment_id, content: commentData.content.substring(0,50) } : null,
       };
-      
       setUserNotifications(prev => [formattedNotification, ...prev.slice(0, 19)]); 
       if (!newNotification.is_read) {
         setUnreadNotificationCount(prev => prev + 1);
@@ -474,7 +469,7 @@ const App = () => {
   const toggleTheme = () => { 
     const newTheme = theme === 'light' ? 'dark' : 'light';
     setTheme(newTheme);
-    localStorage.setItem('socialfi-theme', newTheme);
+    localStorage.setItem('splash-theme', newTheme);
     document.documentElement.classList.toggle('dark', newTheme === 'dark');
   };
   const handleNavigation = (page, args = null) => { 
@@ -674,11 +669,7 @@ const App = () => {
     console.log(`Simulated trade: ${action} ${amount} of ${token.symbol} for user ${appUser.sui_address}`);
     alert(`This would ${action} ${amount} ${token.symbol}. Backend/SUI interaction needed.`);
   };
-  const handleSendTransaction = (tokenSymbol, amount, recipientAddress) => { 
-    if (!appUser) { alert("Please connect your wallet to send transactions."); return; }
-    console.log(`Simulated send: ${amount} ${tokenSymbol} to ${recipientAddress} from ${appUser.sui_address}`);
-    alert(`This would send ${amount} ${tokenSymbol} to ${recipientAddress}. Backend/SUI interaction needed.`);
-  };
+  
   const handleDisconnect = () => { 
     disconnectWallet();
     setAppUser(null); 
@@ -702,7 +693,7 @@ const App = () => {
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-          <p className="text-xl font-semibold">Loading SocialFi Platform...</p>
+          <p className="text-xl font-semibold">Loading Splash Platform...</p>
         </div>
       </div>
     ); 
@@ -722,12 +713,19 @@ const App = () => {
         return <HomePage user={userPropsForPage} posts={posts} isPostsLoading={isPostsLoading} trendingTokens={trendingTokensList} launchpadProjects={launchpadProjectsList} onNavigate={handleNavigation} onPostCreate={handleCreatePost} onLikeToggle={handleLikeToggle} onCreateComment={handleCreateComment} onFetchComments={fetchCommentsForPost} activeFeedType={activeFeedType} setActiveFeedType={setActiveFeedType} />;
       case 'profile':
         return <ProfilePage appUser={userPropsForPage} profileSuiAddress={pageArgs?.suiAddress || appUser?.sui_address} allPosts={posts} isAppUserPostsLoading={isPostsLoading} onNavigate={handleNavigation} onLikeToggle={handleLikeToggle} onCreateComment={handleCreateComment} onFetchComments={fetchCommentsForPost} onFollow={handleFollow} onUnfollow={handleUnfollow} />;
+      case 'notifications': 
+        return <NotificationsPage 
+                  userNotifications={userNotifications} 
+                  appUser={userPropsForPage} 
+                  onNavigate={handleNavigation} 
+                  handleMarkNotificationAsRead={handleMarkNotificationAsRead} 
+                />;
       case 'launchpad':
         return <LaunchpadPage launchpadProjects={launchpadProjectsList} onNavigate={handleNavigation} onCreateLaunchpadProject={handleCreateLaunchpadProject} />;
       case 'trading':
         return <TradingPage user={userPropsForPage} trendingTokens={trendingTokensList} initialToken={pageArgs?.token} onTrade={handleTrade} />;
       case 'wallet':
-        return userPropsForPage ? <WalletPage user={userPropsForPage} onNavigate={handleNavigation} onSendTransaction={handleSendTransaction}/> : <div className="p-6 text-center">Please connect wallet to view wallet.</div>;
+        return userPropsForPage ? <WalletPage appUser={userPropsForPage} /> : <div className="p-6 text-center">Please connect wallet to view wallet.</div>;
       case 'settings':
         return userPropsForPage ? <SettingsPage user={userPropsForPage} onUpdateUser={handleUpdateUser} onToggleTheme={toggleTheme} currentTheme={theme} /> : <div className="p-6 text-center">Please connect wallet to view settings.</div>;
       default:
@@ -777,7 +775,7 @@ const App = () => {
                 onClick={() => setShowNotificationDropdown(prev => !prev)}
               >
                 {unreadNotificationCount > 0 && (
-                  <span className="absolute top-0 right-0 block h-3 w-3 transform -translate-y-1/2 translate-x-1/2 rounded-full ring-2 ring-white dark:ring-gray-800 bg-red-500 text-white text-[0.6rem] flex items-center justify-center">
+                  <span className="absolute top-0 right-0 flex h-3 w-3 transform -translate-y-1/2 translate-x-1/2 rounded-full ring-2 ring-white dark:ring-gray-800 bg-red-500 text-white text-[0.6rem] items-center justify-center">
                     {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
                   </span>
                 )}
@@ -833,7 +831,7 @@ const App = () => {
                   </div>
                   <Button variant="ghost" size="sm" icon={Bell} className="ml-auto relative" onClick={() => setShowNotificationDropdown(prev => !prev)}>
                     {unreadNotificationCount > 0 && (
-                      <span className="absolute top-0 right-0 block h-3 w-3 transform -translate-y-1/2 translate-x-1/2 rounded-full ring-2 ring-white dark:ring-gray-800 bg-red-500 text-white text-[0.6rem] flex items-center justify-center">
+                      <span className="absolute top-0 right-0 flex h-3 w-3 transform -translate-y-1/2 translate-x-1/2 rounded-full ring-2 ring-white dark:ring-gray-800 bg-red-500 text-white text-[0.6rem] items-center justify-center">
                         {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
                       </span>
                     )}
@@ -886,7 +884,7 @@ const App = () => {
                             onClick={() => {
                                 handleMarkNotificationAsRead(notif.id);
                                 if (notif.post_id) {
-                                    handleNavigation('home'); // Placeholder, ideally navigate to specific post
+                                    handleNavigation('home'); 
                                 } else if (notif.type === 'follow' && notif.actor?.sui_address) {
                                     handleNavigation('profile', { suiAddress: notif.actor.sui_address });
                                 }
